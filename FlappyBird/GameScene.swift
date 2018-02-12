@@ -7,21 +7,26 @@
 //
 
 import SpriteKit
+import AVFoundation
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
     
     var scrollNode: SKNode!
     var wallNode: SKNode!
     var bird: SKSpriteNode!
+    var itemNode: SKNode!
     
     let birdCategory: UInt32 = 1 << 0       // 0...00001
     let groundCategory: UInt32 = 1 << 1     // 0...00010
     let wallCategory: UInt32 = 1 << 2       // 0...00100
     let scoreCategory: UInt32 = 1 << 3      // 0...01000
+    let itemCategory: UInt32 = 1 << 4
     
     var score = 0
+    var itemScore = 0
     var scoreLabelNode:SKLabelNode!
     var bestScoreLabelNode:SKLabelNode!
+    var itemScoreLabelNode:SKLabelNode!
     let userDefaults:UserDefaults = UserDefaults.standard
     
     override func didMove(to view: SKView) {
@@ -35,12 +40,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         wallNode = SKNode()
         scrollNode.addChild(wallNode)
         
+        itemNode = SKNode()
+        scrollNode.addChild(itemNode)
+        
         setupGround()
         setupCloud()
         setupWall()
         setupBird()
+        setupItem()
         
         setupScoreLabel()
+        play(music: "bgm.mp3", loop: true)
     }
     
     // 画面をタップした時に呼ばれる
@@ -75,10 +85,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 userDefaults.set(bestScore, forKey: "BEST")
                 userDefaults.synchronize()
             }
+            // アイテム取得時の処理
+        }else if ((contact.bodyA.categoryBitMask & itemCategory) == itemCategory || (contact.bodyB.categoryBitMask & itemCategory) == itemCategory) {
+            print("ItemGet")
+            itemScore += 1
+            itemScoreLabelNode.text = "Item Score:\(itemScore)"
+            play(music: "getItem.mp3", loop: false)
+            if ((contact.bodyA.categoryBitMask & itemCategory) == itemCategory){
+                contact.bodyA.node?.removeFromParent()
+            }else {
+                contact.bodyB.node?.removeFromParent()
+            }
         } else {
             // 壁か地面と衝突した
             print("GameOver")
-            
+            play(music: "hit.mp3", loop: false)
             // スクロールを停止させる
             scrollNode.speed = 0
             
@@ -209,7 +230,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let under_wall_y = CGFloat(under_wall_lowest_y + random_y)
             
             // キャラが通り抜ける隙間の長さ
-            let slit_length = self.frame.size.height / 6
+            let slit_length = self.frame.size.height / 4 - CGFloat(self.score)
             
             // 下側の壁を作成
             let under = SKSpriteNode(texture: wallTexture)
@@ -278,12 +299,67 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // 衝突のカテゴリー設定
         bird.physicsBody?.categoryBitMask = birdCategory
         bird.physicsBody?.collisionBitMask = groundCategory | wallCategory
-        bird.physicsBody?.contactTestBitMask = groundCategory | wallCategory
+        bird.physicsBody?.contactTestBitMask = groundCategory | wallCategory | itemCategory
         // アニメーションを設定
         bird.run(flap)
         
         // スプライトを追加する
         addChild(bird)
+    }
+    
+    func setupItem() {
+        let itemTexture = SKTexture(imageNamed: "item")
+        let groundTexture = SKTexture(imageNamed: "ground")
+        let wallTexture = SKTexture(imageNamed: "wall")
+        itemTexture.filteringMode = .linear
+        
+        // 移動する距離を計算
+        let movingDistance = CGFloat(self.frame.size.width + wallTexture.size().width + itemTexture.size().width)
+        
+        // 画面外まで移動するアクションを作成
+        let moveItem = SKAction.moveBy(x: -movingDistance, y: 0, duration:4.0)
+        
+        // 自身を取り除くアクションを作成
+        let removeItem = SKAction.removeFromParent()
+        
+        // 2つのアニメーションを順に実行するアクションを作成
+        let itemAnimation = SKAction.sequence([moveItem, removeItem])
+        
+        let createItemAnimation = SKAction.run({
+            let items = SKNode()
+            items.position = CGPoint(x: self.frame.size.width + itemTexture.size().width / 2, y: 0.0)
+            items.zPosition = -50.0
+
+            let item_num_range = 4
+            let item_num = arc4random_uniform( UInt32(item_num_range) )
+            
+            let random_y_range = self.frame.size.height - groundTexture.size().height - itemTexture.size().height
+            let random_y = CGFloat(arc4random_uniform( UInt32(random_y_range) ))
+            
+            let random_span_range = (self.frame.size.height - groundTexture.size().height) / 4
+            let random_span = CGFloat(arc4random_uniform( UInt32(random_span_range) ))
+            
+            for i in 0 ..< item_num {
+                let item = SKSpriteNode(texture: itemTexture)
+  
+                item.position = CGPoint(x: 0.0, y:random_y + itemTexture.size().height + groundTexture.size().height + (itemTexture.size().height + random_span) * CGFloat(i))
+        
+                item.physicsBody = SKPhysicsBody(rectangleOf: itemTexture.size())
+                item.physicsBody?.categoryBitMask = self.itemCategory
+                item.physicsBody?.isDynamic = false
+                
+                items.addChild(item)
+            }
+            items.run(itemAnimation)
+            self.itemNode.addChild(items)
+        })
+        
+        let waitAnimation = SKAction.wait(forDuration: 2)
+        
+        let repeatForeverAnimation = SKAction.repeatForever(SKAction.sequence([waitAnimation, createItemAnimation]))
+        
+        itemNode.run(repeatForeverAnimation)
+        
     }
     
     func setupScoreLabel() {
@@ -296,9 +372,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         scoreLabelNode.text = "Score:\(score)"
         self.addChild(scoreLabelNode)
         
+        itemScore = 0
+        itemScoreLabelNode = SKLabelNode()
+        itemScoreLabelNode.fontColor = UIColor.black
+        itemScoreLabelNode.position = CGPoint(x: 10, y: self.frame.size.height - 90)
+        itemScoreLabelNode.zPosition = 100 // 一番手前に表示する
+        itemScoreLabelNode.horizontalAlignmentMode = SKLabelHorizontalAlignmentMode.left
+        itemScoreLabelNode.text = "Item Score:\(itemScore)"
+        self.addChild(itemScoreLabelNode)
+        
         bestScoreLabelNode = SKLabelNode()
         bestScoreLabelNode.fontColor = UIColor.black
-        bestScoreLabelNode.position = CGPoint(x: 10, y: self.frame.size.height - 90)
+        bestScoreLabelNode.position = CGPoint(x: 10, y: self.frame.size.height - 120)
         bestScoreLabelNode.zPosition = 100 // 一番手前に表示する
         bestScoreLabelNode.horizontalAlignmentMode = SKLabelHorizontalAlignmentMode.left
         
@@ -310,6 +395,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     func restart() {
         score = 0
         scoreLabelNode.text = String("Score:\(score)")
+        itemScore = 0
+        itemScoreLabelNode.text = String("Item Score:\(score)")
         
         bird.position = CGPoint(x: self.frame.size.width * 0.2, y:self.frame.size.height * 0.7)
         bird.physicsBody?.velocity = CGVector.zero
@@ -317,8 +404,24 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         bird.zRotation = 0.0
         
         wallNode.removeAllChildren()
+        itemNode.removeAllChildren()
         
         bird.speed = 1
         scrollNode.speed = 1
+    }
+    
+    //BGM(SE)再生用関数
+    func play(music: String, loop: Bool) {
+        let play = SKAudioNode(fileNamed: music)
+        play.autoplayLooped = loop
+        self.addChild(play)
+        self.run(
+            SKAction.sequence([
+                // SKAction.wait(forDuration: 0.1),
+                SKAction.run {
+                    play.run(SKAction.play())
+                }
+                ])
+        )
     }
 }
